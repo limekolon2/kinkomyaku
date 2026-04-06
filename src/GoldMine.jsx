@@ -20,12 +20,12 @@ const B = { AIR: 0, DIRT: 1, STONE: 2, GOLD: 3, DIAMOND: 4, BEDROCK: 5, LADDER: 
 const BHP = { [B.DIRT]: 1, [B.STONE]: 3, [B.GOLD]: 2, [B.DIAMOND]: 5, [B.BEDROCK]: 999, [B.STALACTITE]: 1, [B.STALAGMITE]: 1, [B.LIMESTONE]: 2 };
 const TOOLS = [
   { name: "木のツルハシ", power: 1, cost: 0 },
-  { name: "鉄のツルハシ", power: 2, cost: 300 },
-  { name: "鋼のツルハシ", power: 3, cost: 800 },
-  { name: "金のツルハシ", power: 5, cost: 2000 },
-  { name: "ダイヤツルハシ", power: 8, cost: 5000 },
+  { name: "鉄のツルハシ", power: 2, cost: 3000000 },
+  { name: "鋼のツルハシ", power: 3, cost: 8000000 },
+  { name: "金のツルハシ", power: 5, cost: 20000000 },
+  { name: "ダイヤツルハシ", power: 8, cost: 50000000 },
 ];
-const GP = 100, DP = 500;
+const GP = 1000000, DP = 5000000;
 
 // Limestone cave generation using cellular automata
 function generateMap() {
@@ -203,7 +203,7 @@ function useContainerSize(ref) {
 
 function DPad({ onMove }) {
   const iv = useRef(null);
-  const start = (dx, dy) => { onMove(dx, dy); iv.current = setInterval(() => onMove(dx, dy), 120); };
+  const start = (dx, dy) => { onMove(dx, dy); iv.current = setInterval(() => onMove(dx, dy), 70); };
   const stop = () => { if (iv.current) { clearInterval(iv.current); iv.current = null; } };
   const sz = 52, g = 3;
   const bS = () => ({
@@ -250,17 +250,20 @@ export default function CaveMiner() {
   const [msg, setMsg] = useState("");
   const [drips, setDrips] = useState([]);
   const [shopOpen, setShopOpen] = useState(false);
+  const [revealed, setRevealed] = useState(() => new Set());
   const [mapView, setMapView] = useState(false);
+  const [goldFlash, setGoldFlash] = useState(false);
+  const [sparkles, setSparkles] = useState([]);
   const msgT = useRef(null);
   const keys = useRef({});
   const facingDir = useRef(1); // 1=right, -1=left
   const camDragging = useRef(false);
   const camDragResumeTimer = useRef(null);
   const camDragAccum = useRef({ x: 0, y: 0 });
-  const [fever, setFever] = useState(false);
-  const feverTimer = useRef(null);
   const pxRef = useRef(2);
   const pyRef = useRef(2);
+  const mapDataRef = useRef(null);
+  const toolRef = useRef(0);
 
   const layout = useMemo(() => {
     const w = vp.w, h = vp.h, hudH = 42;
@@ -285,7 +288,13 @@ export default function CaveMiner() {
     setPx(2); setPy(2);
     setInv({ gold: 0, diamond: 0 }); setMoney(0); setTool(0);
     setCamX(0); setCamY(0);
-    setParticles([]); setDrips([]); setTotalSold(0); setLadders(5); setPlanks(5); setShopOpen(false);
+    setParticles([]); setDrips([]); setTotalSold(0); setLadders(10); setPlanks(10); setShopOpen(false);
+    const initRevealed = new Set();
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const rx = 2 + dx, ry = 2 + dy;
+      if (rx >= 0 && rx < COLS && ry >= 0 && ry < ROWS) initRevealed.add(ry * COLS + rx);
+    }
+    setRevealed(initRevealed);
     setScreen("game");
   }, []);
 
@@ -301,6 +310,15 @@ export default function CaveMiner() {
     if (!mapData || camDragging.current) return;
     setCamX(Math.max(0, Math.min(px - Math.floor(layout.viewCols / 2), COLS - layout.viewCols)));
     setCamY(Math.max(0, Math.min(py - Math.floor(layout.viewRows / 2), ROWS - layout.viewRows)));
+    // プレイヤー周囲を探索済みに
+    setRevealed(prev => {
+      const next = new Set(prev);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const rx = px + dx, ry = py + dy;
+        if (rx >= 0 && rx < COLS && ry >= 0 && ry < ROWS) next.add(ry * COLS + rx);
+      }
+      return next;
+    });
   }, [px, py, mapData, layout.viewCols, layout.viewRows]);
 
   const burst = useCallback((bx, by, color) => {
@@ -321,69 +339,157 @@ export default function CaveMiner() {
 
   useEffect(() => { pxRef.current = px; }, [px]);
   useEffect(() => { pyRef.current = py; }, [py]);
+  useEffect(() => { mapDataRef.current = mapData; }, [mapData]);
+  useEffect(() => { toolRef.current = tool; }, [tool]);
 
   const tryMove = useCallback((dx, dy) => {
-    if (!mapData) return;
+    const md = mapDataRef.current;
+    const cpx = pxRef.current, cpy = pyRef.current;
+    const curTool = toolRef.current;
+    if (!md) return;
     if (dx !== 0) facingDir.current = dx;
-    const nx = px + dx, ny = py + dy;
+    const nx = cpx + dx, ny = cpy + dy;
     if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return;
-    const block = mapData.map[ny][nx];
+    const block = md.map[ny][nx];
+
+    // 水は通過できるが掘れない
     if (block === B.AIR || block === B.LADDER || block === B.ENTRANCE || block === B.WATER || block === B.PLANK) {
       setPx(nx); setPy(ny);
-    } else if (block !== B.BEDROCK) {
-      const newHp = mapData.hp.map(r => [...r]);
-      newHp[ny][nx] -= TOOLS[tool].power * (fever ? 2 : 1);
+    } else if (block !== B.BEDROCK && block !== B.WATER) {
+      const newHp = md.hp.map(r => [...r]);
+      newHp[ny][nx] -= TOOLS[curTool].power;
       if (newHp[ny][nx] <= 0) {
-        const newMap = mapData.map.map(r => [...r]);
+        const newMap = md.map.map(r => [...r]);
         const broken = newMap[ny][nx];
         newMap[ny][nx] = B.AIR; newHp[ny][nx] = 0;
+
+        // ── 採掘トリガーイベント判定 ──
+        const roll = Math.random();
+        let eventHandled = false;
+
+        if (broken !== B.GOLD && broken !== B.DIAMOND && roll < 0.033) {
+          // 💫 金脈発見: フラッシュ+キラキラ＋隣接ブロックが金に
+          eventHandled = true;
+          setInv(p => ({ ...p, gold: p.gold + 1 }));
+          showFace("hit", 1200);
+          const spread = 2 + Math.floor(Math.random() * 3);
+          let count = 0;
+          const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+          for (const [ddx, ddy] of dirs) {
+            if (count >= spread) break;
+            const gx = nx + ddx, gy = ny + ddy;
+            if (gx > 0 && gx < COLS - 1 && gy > 0 && gy < ROWS - 1 &&
+                (newMap[gy][gx] === B.LIMESTONE || newMap[gy][gx] === B.STONE || newMap[gy][gx] === B.DIRT) &&
+                Math.random() < 0.6) {
+              newMap[gy][gx] = B.GOLD;
+              newHp[gy][gx] = BHP[B.GOLD];
+              count++;
+            }
+          }
+          flash(`💫 金脈発見！ 金塊+1、さらに${count}箇所に金脈が！`);
+          // 画面フラッシュ
+          setGoldFlash(true);
+          setTimeout(() => setGoldFlash(false), 600);
+          // キラキラ降らせる
+          const sp = Array.from({ length: 24 }, () => ({
+            id: Math.random(),
+            x: Math.random() * 100,
+            delay: Math.random() * 0.4,
+            dur: 0.8 + Math.random() * 0.6,
+            size: 6 + Math.random() * 10,
+            char: ["✦","✧","◆","⬥","★"][Math.floor(Math.random() * 5)],
+          }));
+          setSparkles(sp);
+          setTimeout(() => setSparkles([]), 1800);
+        }
+
+        if (!eventHandled) {
+          if (broken === B.GOLD) { setInv(p => ({ ...p, gold: p.gold + 1 })); flash("⛏ 金塊 +1"); burst(nx, ny, "#FFD700"); showFace("hit", 1000); }
+          else if (broken === B.DIAMOND) { setInv(p => ({ ...p, diamond: p.diamond + 1 })); flash("💎 ダイヤ +1"); burst(nx, ny, "#00CED1"); showFace("hit", 1200); }
+          else { burst(nx, ny, broken === B.DIRT ? "#8B6914" : "#666"); showFace("dig", 600); }
+        }
+
+        if (!eventHandled && roll >= 0.10 && roll < 0.18) {
+          // 🌊 地下水脈: 掘ったブロックが水になる
+          newMap[ny][nx] = B.WATER;
+          flash("🌊 水脈にぶち当たった！");
+
+        } else if (!eventHandled && roll >= 0.18 && roll < 0.32) {
+          // ⚠️ 連鎖崩落: 周囲のブロックが連鎖して崩れる
+          const collapse = (map, hp, cx, cy, depth) => {
+            if (depth > 2) return;
+            const dirs = [[1,0],[-1,0],[0,-1]];
+            for (const [ddx, ddy] of dirs) {
+              const bx = cx + ddx, by = cy + ddy;
+              if (bx > 0 && bx < COLS - 1 && by > 0 && by < ROWS - 1 &&
+                  map[by][bx] !== B.AIR && map[by][bx] !== B.BEDROCK &&
+                  map[by][bx] !== B.WATER && map[by][bx] !== B.ENTRANCE &&
+                  map[by][bx] !== B.LADDER && map[by][bx] !== B.GOLD &&
+                  map[by][bx] !== B.DIAMOND &&
+                  Math.random() < 0.55 - depth * 0.15) {
+                const b = map[by][bx];
+                map[by][bx] = B.AIR;
+                hp[by][bx] = 0;
+                burst(bx, by, b === B.DIRT ? "#8B6914" : "#888");
+                collapse(map, hp, bx, by, depth + 1);
+              }
+            }
+          };
+          collapse(newMap, newHp, nx, ny, 0);
+          flash("⚠️ 連鎖崩落！");
+        }
+
         setMapData({ map: newMap, hp: newHp });
-        if (broken === B.GOLD) { setInv(p => ({ ...p, gold: p.gold + 1 })); flash("⛏ 金塊 +1"); burst(nx, ny, "#FFD700"); showFace("hit", 1000); }
-        else if (broken === B.DIAMOND) { setInv(p => ({ ...p, diamond: p.diamond + 1 })); flash("💎 ダイヤ +1"); burst(nx, ny, "#00CED1"); showFace("hit", 1200); }
-        else { burst(nx, ny, broken === B.DIRT ? "#8B6914" : "#666"); showFace("dig", 600); }
         setPx(nx); setPy(ny);
       } else {
-        setMapData({ map: mapData.map, hp: newHp });
+        setMapData({ map: md.map, hp: newHp });
         burst(nx, ny, block === B.GOLD ? "#FFD700" : block === B.DIAMOND ? "#00CED1" : "#666");
         showFace("dig", 400);
       }
     }
-  }, [mapData, px, py, tool, fever, flash, burst, showFace]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flash, burst, showFace]);
 
   const placeLadder = useCallback(() => {
-    if (ladders <= 0 || !mapData) return;
-    if (mapData.map[py][px] === B.AIR) {
-      const nm = mapData.map.map(r => [...r]);
-      nm[py][px] = B.LADDER;
-      setMapData({ map: nm, hp: mapData.hp.map(r => [...r]) });
+    const md = mapDataRef.current;
+    if (ladders <= 0 || !md) return;
+    const cx = pxRef.current, cy = pyRef.current;
+    if (md.map[cy][cx] === B.AIR) {
+      const nm = md.map.map(r => [...r]);
+      nm[cy][cx] = B.LADDER;
+      setMapData({ map: nm, hp: md.hp.map(r => [...r]) });
       setLadders(p => p - 1); flash("🪜 ハシゴ設置");
     }
-  }, [ladders, mapData, px, py, flash]);
+  }, [ladders, flash]);
 
   const placePlank = useCallback(() => {
-    if (planks <= 0 || !mapData) return;
-    const tx = px + facingDir.current;
-    const ty = py;
+    const md = mapDataRef.current;
+    if (planks <= 0 || !md) return;
+    const cx = pxRef.current, cy = pyRef.current;
+    const tx = cx + facingDir.current;
+    const ty = cy;
     if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
-    if (mapData.map[ty][tx] === B.AIR || mapData.map[ty][tx] === B.WATER) {
-      const nm = mapData.map.map(r => [...r]);
+    if (md.map[ty][tx] === B.AIR || md.map[ty][tx] === B.WATER) {
+      const nm = md.map.map(r => [...r]);
       nm[ty][tx] = B.PLANK;
-      setMapData({ map: nm, hp: mapData.hp.map(r => [...r]) });
+      setMapData({ map: nm, hp: md.hp.map(r => [...r]) });
       setPlanks(p => p - 1); flash(`🪵 足場設置 ${facingDir.current > 0 ? '→' : '←'}`);
     } else {
       flash("そこには置けない！");
     }
-  }, [planks, mapData, px, py, flash]);
+  }, [planks, flash]);
 
   // Gravity
   useEffect(() => {
-    if (!mapData || screen !== "game") return;
+    if (screen !== "game") return;
     const g = setInterval(() => {
+      const md = mapDataRef.current;
+      if (!md) return;
+      const cx = pxRef.current;
       setPy(prev => {
         if (prev + 1 >= ROWS) return prev;
-        const below = mapData.map[prev + 1][px];
-        const cur = mapData.map[prev][px];
-        // Don't fall if on ladder, on plank, or block below is plank (acts as floor)
+        const below = md.map[prev + 1][cx];
+        const cur = md.map[prev][cx];
         if (cur === B.LADDER || cur === B.PLANK || below === B.PLANK) return prev;
         if (below === B.AIR || below === B.ENTRANCE || below === B.WATER) {
           return prev + 1;
@@ -392,7 +498,7 @@ export default function CaveMiner() {
       });
     }, 100);
     return () => clearInterval(g);
-  }, [mapData, screen, px]);
+  }, [screen]);
 
   // Particles
   useEffect(() => {
@@ -483,30 +589,27 @@ export default function CaveMiner() {
   // Keys
   useEffect(() => {
     if (screen !== "game") return;
+    let lastMoveTime = 0;
+    const MOVE_INTERVAL = 110;
     const dn = (e) => {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "a", "s", "d", "e", "m", " "].includes(e.key.toLowerCase())) e.preventDefault();
-      keys.current[e.key] = true;
-      if (e.key === "e" || e.key === "E") placeLadder();
-      if (e.key === "q" || e.key === "Q") placePlank();
-      if (e.key === "m" || e.key === "M") setMapView(v => !v);
+      const isMove = ["ArrowRight","ArrowLeft","ArrowUp","ArrowDown","w","a","s","d"].includes(e.key);
+      if (isMove && e.repeat) {
+        const now = performance.now();
+        if (now - lastMoveTime < MOVE_INTERVAL) return;
+        lastMoveTime = now;
+      }
+      if (e.key === "ArrowRight" || e.key === "d") tryMove(1, 0);
+      else if (e.key === "ArrowLeft" || e.key === "a") tryMove(-1, 0);
+      else if (e.key === "ArrowUp" || e.key === "w") tryMove(0, -1);
+      else if (e.key === "ArrowDown" || e.key === "s") tryMove(0, 1);
+      else if (e.key === "e" || e.key === "E") placeLadder();
+      else if (e.key === "q" || e.key === "Q") placePlank();
+      else if (e.key === "m" || e.key === "M") setMapView(v => !v);
     };
-    const up = (e) => { keys.current[e.key] = false; };
     window.addEventListener("keydown", dn);
-    window.addEventListener("keyup", up);
-    return () => { window.removeEventListener("keydown", dn); window.removeEventListener("keyup", up); };
-  }, [screen, placeLadder, placePlank]);
-
-  useEffect(() => {
-    if (screen !== "game") return;
-    const loop = setInterval(() => {
-      const k = keys.current;
-      if (k["ArrowRight"] || k["d"]) tryMove(1, 0);
-      else if (k["ArrowLeft"] || k["a"]) tryMove(-1, 0);
-      else if (k["ArrowUp"] || k["w"]) tryMove(0, -1);
-      else if (k["ArrowDown"] || k["s"]) tryMove(0, 1);
-    }, 120);
-    return () => clearInterval(loop);
-  }, [screen, tryMove]);
+    return () => { window.removeEventListener("keydown", dn); };
+  }, [screen, placeLadder, placePlank, tryMove]);
 
   useEffect(() => {
     const prevent = (e) => { if (screen === "game") e.preventDefault(); };
@@ -519,8 +622,9 @@ export default function CaveMiner() {
   const sell = useCallback(() => {
     const t = inv.gold * GP + inv.diamond * DP;
     if (!t) { flash("売るものがない！"); return; }
-    setMoney(p => p + t); setTotalSold(p => p + t);
-    flash(`💰 ¥${t} 獲得！`); setInv({ gold: 0, diamond: 0 });
+    const newMoney = money + t;
+    setMoney(newMoney); setTotalSold(p => p + t);
+    flash(`💰 ¥${t.toLocaleString()} 獲得！ 所持金: ¥${newMoney.toLocaleString()}`); setInv({ gold: 0, diamond: 0 });
   }, [inv, flash]);
 
   const buyTool = useCallback((i) => {
@@ -529,123 +633,28 @@ export default function CaveMiner() {
   }, [money, tool, flash]);
 
   const buyLadder = useCallback(() => {
-    if (money < 50) { flash("お金が足りない！"); return; }
-    setMoney(p => p - 50); setLadders(p => p + 3); flash("🪜 ハシゴ x3 購入！");
+    if (money < 500000) { flash("お金が足りない！"); return; }
+    setMoney(p => p - 500000); setLadders(p => p + 3); flash("🪜 ハシゴ x3 購入！");
   }, [money, flash]);
 
   const buyPlank = useCallback(() => {
-    if (money < 50) { flash("お金が足りない！"); return; }
-    setMoney(p => p - 50); setPlanks(p => p + 3); flash("🪵 足場 x3 購入！");
+    if (money < 500000) { flash("お金が足りない！"); return; }
+    setMoney(p => p - 500000); setPlanks(p => p + 3); flash("🪵 足場 x3 購入！");
   }, [money, flash]);
 
   const newMapBtn = useCallback(() => {
-    if (money < 300) { flash("¥300 必要！"); return; }
-    setMoney(p => p - 300);
+    if (money < 3000000) { flash("¥3,000,000 必要！"); return; }
+    setMoney(p => p - 3000000);
     setMapData(generateMap()); setPx(2); setPy(2); setLadders(p => p + 3); setPlanks(p => p + 3); setDrips([]);
+    const initRevealed = new Set();
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const rx = 2 + dx, ry = 2 + dy;
+      if (rx >= 0 && rx < COLS && ry >= 0 && ry < ROWS) initRevealed.add(ry * COLS + rx);
+    }
+    setRevealed(initRevealed);
     flash("🗺️ 新しい洞窟を発見！");
   }, [money, flash]);
 
-  // Random events
-  useEffect(() => {
-    if (screen !== "game") return;
-    const interval = setInterval(() => {
-      setMapData(prev => {
-        if (!prev) return prev;
-        const cx = pxRef.current, cy = pyRef.current;
-        const events = [
-          // ⚡ 採掘フィーバー
-          () => {
-            setFever(true);
-            flash("⚡ 採掘フィーバー！ 15秒間威力2倍！");
-            if (feverTimer.current) clearTimeout(feverTimer.current);
-            feverTimer.current = setTimeout(() => { setFever(false); flash("⚡ フィーバー終了"); }, 15000);
-            return prev;
-          },
-          // 💫 金脈発見
-          () => {
-            const newMap = prev.map.map(r => [...r]);
-            const newHp = prev.hp.map(r => [...r]);
-            let count = 0;
-            for (let dy = -4; dy <= 4 && count < 5; dy++) {
-              for (let dx = -4; dx <= 4 && count < 5; dx++) {
-                const nx = cx + dx, ny = cy + dy;
-                if (nx > 0 && nx < COLS - 1 && ny > 0 && ny < ROWS - 1 &&
-                    (newMap[ny][nx] === B.LIMESTONE || newMap[ny][nx] === B.STONE || newMap[ny][nx] === B.DIRT) &&
-                    Math.random() < 0.5) {
-                  newMap[ny][nx] = B.GOLD;
-                  newHp[ny][nx] = BHP[B.GOLD];
-                  count++;
-                }
-              }
-            }
-            if (count > 0) flash(`💫 金脈発見！ ${count}箇所に金が出現！`);
-            return { map: newMap, hp: newHp };
-          },
-          // 💎 宝石発見
-          () => {
-            const newMap = prev.map.map(r => [...r]);
-            const newHp = prev.hp.map(r => [...r]);
-            let placed = 0;
-            for (let attempt = 0; attempt < 30 && placed < 2; attempt++) {
-              const dx = 3 + Math.floor(Math.random() * (COLS - 6));
-              const dy = Math.floor(ROWS * 0.5) + Math.floor(Math.random() * (ROWS * 0.45));
-              if (dy < ROWS - 1 && newMap[dy][dx] !== B.AIR && newMap[dy][dx] !== B.BEDROCK && newMap[dy][dx] !== B.WATER) {
-                newMap[dy][dx] = B.DIAMOND;
-                newHp[dy][dx] = BHP[B.DIAMOND];
-                placed++;
-              }
-            }
-            if (placed > 0) flash("💎 宝石発見！ 深部にダイヤが出現した！");
-            return { map: newMap, hp: newHp };
-          },
-          // ⚠️ 落盤警告
-          () => {
-            const newHp = prev.hp.map(r => [...r]);
-            let count = 0;
-            for (let dy = -3; dy <= 0; dy++) {
-              for (let dx = -3; dx <= 3; dx++) {
-                const nx = cx + dx, ny = cy + dy;
-                if (nx > 0 && nx < COLS - 1 && ny > 0 && ny < ROWS - 1 &&
-                    prev.map[ny][nx] !== B.AIR && prev.map[ny][nx] !== B.BEDROCK &&
-                    prev.map[ny][nx] !== B.WATER && prev.hp[ny][nx] > 1) {
-                  newHp[ny][nx] = 1;
-                  count++;
-                }
-              }
-            }
-            if (count > 0) flash("⚠️ 落盤注意！ 頭上のブロックが脆くなった！");
-            return { map: prev.map, hp: newHp };
-          },
-          // 🌊 地下水脈
-          () => {
-            const newMap = prev.map.map(r => [...r]);
-            const newHp = prev.hp.map(r => [...r]);
-            let spread = 0;
-            for (let y = Math.floor(ROWS * 0.4); y < ROWS - 2; y++) {
-              for (let x = 1; x < COLS - 1; x++) {
-                if (newMap[y][x] === B.WATER) {
-                  for (const [ddx, ddy] of [[1,0],[-1,0],[0,1]]) {
-                    const nx = x + ddx, ny = y + ddy;
-                    if (nx > 0 && nx < COLS - 1 && ny < ROWS - 1 && newMap[ny][nx] === B.AIR && spread < 8) {
-                      newMap[ny][nx] = B.WATER;
-                      newHp[ny][nx] = 0;
-                      spread++;
-                    }
-                  }
-                }
-              }
-            }
-            if (spread > 0) flash("🌊 地下水脈が広がった！");
-            else flash("🌊 地下水脈の気配…");
-            return { map: newMap, hp: newHp };
-          },
-        ];
-        const chosen = events[Math.floor(Math.random() * events.length)];
-        return chosen();
-      });
-    }, 25000 + Math.random() * 15000);
-    return () => clearInterval(interval);
-  }, [screen, flash]);
 
   // --- TITLE ---
   if (screen === "title") {
@@ -694,6 +703,8 @@ export default function CaveMiner() {
   const miniH = Math.floor(miniW * ROWS / COLS);
   const mTW = miniW / COLS, mTH = miniH / ROWS;
 
+  const isRevealed = (x, y) => revealed.has(y * COLS + x);
+
   const blockColor = (b, x, y) => {
     if (b === B.DIRT) { const h = (x * 374761 + y * 668265) % 100; return h < 30 ? "#7a5c2e" : h < 60 ? "#8a6832" : "#806028"; }
     if (b === B.STONE) { const h = (x * 123457 + y * 789013) % 100; return h < 25 ? "#555568" : h < 50 ? "#606072" : "#5a5a6a"; }
@@ -701,10 +712,10 @@ export default function CaveMiner() {
     if (b === B.STALACTITE) { const h = (x * 345 + y * 678) % 100; return h < 50 ? "#8aaab8" : "#a0c0cc"; }
     if (b === B.STALAGMITE) { const h = (x * 456 + y * 789) % 100; return h < 50 ? "#809aa8" : "#98b4be"; }
     if (b === B.WATER) return "#2a5a8a";
-    if (b === B.GOLD) return "#FFD700";
-    if (b === B.DIAMOND) return "#00CED1";
+    if (b === B.GOLD) return isRevealed(x, y) ? "#FFD700" : blockColor(B.LIMESTONE, x, y);
+    if (b === B.DIAMOND) return isRevealed(x, y) ? "#00CED1" : blockColor(B.STONE, x, y);
     if (b === B.BEDROCK) return "#252525";
-    if (b === B.LADDER) return "#8B4513";
+    if (b === B.LADDER) return "#000";
     if (b === B.PLANK) return "#a08050";
     if (b === B.ENTRANCE) return "transparent";
     return "#444";
@@ -730,7 +741,6 @@ export default function CaveMiner() {
         <span style={{ color: "#8B4513" }}>🪜{ladders}</span>
         <span style={{ color: "#a08050" }}>🪵{planks}</span>
         <span style={{ color: "#777" }}>深度:{py}</span>
-        {fever && <span style={{ color: "#ff4400", fontWeight: 700, animation: "none", textShadow: "0 0 8px #ff6600" }}>⚡フィーバー中</span>}
         <button onClick={() => setShopOpen(true)} style={{
           padding: "4px 12px", fontSize: "clamp(12px,1.6vw,17px)",
           background: atEntrance ? "#2a2000" : "#111",
@@ -779,7 +789,7 @@ export default function CaveMiner() {
           <div style={{
             position: "absolute", width: COLS * T, height: ROWS * T,
             transform: `translate(${-camX * T}px, ${-camY * T}px)`,
-            transition: "transform 0.1s ease-out",
+            transition: "transform 0.04s linear",
           }}>
             {/* Render blocks */}
             {mapData && mapData.map.map((row, y) => {
@@ -873,7 +883,7 @@ export default function CaveMiner() {
                 const bg = blockColor(block, x, y);
                 const maxH = BHP[block] || 1, curH = mapData.hp[y][x], dmg = 1 - curH / maxH;
 
-                if (block === B.GOLD) {
+                if (block === B.GOLD && isRevealed(x, y)) {
                   return (
                     <div key={`${x}-${y}`} style={{
                       position: "absolute", left: x * T, top: y * T, width: T, height: T,
@@ -890,17 +900,26 @@ export default function CaveMiner() {
                   <div key={`${x}-${y}`} style={{
                     position: "absolute", left: x * T, top: y * T, width: T, height: T,
                     background: bg, boxSizing: "border-box",
-                    border: block === B.DIAMOND ? "1px solid #009999"
+                    border: (block === B.DIAMOND && isRevealed(x, y)) ? "1px solid #009999"
                       : block === B.LADDER ? "none"
                       : block === B.LIMESTONE ? "1px solid rgba(100,95,80,0.4)"
                       : "1px solid rgba(0,0,0,0.3)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: T * 0.38, fontWeight: 700,
-                    color: block === B.DIAMOND ? "rgba(170,255,255,0.8)" : "#6a4020",
+                    color: (block === B.DIAMOND && isRevealed(x, y)) ? "rgba(170,255,255,0.8)" : "#6a4020",
                     opacity: block === B.LADDER ? 0.7 : 1,
-                    boxShadow: block === B.DIAMOND ? `inset 0 0 ${T * 0.3}px rgba(0,206,209,0.35)` : "none",
+                    boxShadow: (block === B.DIAMOND && isRevealed(x, y)) ? `inset 0 0 ${T * 0.3}px rgba(0,206,209,0.35)` : "none",
                   }}>
-                    {block === B.DIAMOND ? "◆" : block === B.LADDER ? "H" : ""}
+                    {block === B.DIAMOND && isRevealed(x, y) ? "◆" : ""}
+                    {block === B.LADDER && (
+                      <svg viewBox="0 0 20 24" width={T * 0.7} height={T * 0.85} style={{ display: "block" }}>
+                        <rect x="2" y="0" width="2.5" height="24" rx="0.8" fill="#8B5E3C" />
+                        <rect x="15.5" y="0" width="2.5" height="24" rx="0.8" fill="#8B5E3C" />
+                        <rect x="4" y="4" width="12" height="2" rx="0.5" fill="#A0714F" />
+                        <rect x="4" y="11" width="12" height="2" rx="0.5" fill="#A0714F" />
+                        <rect x="4" y="18" width="12" height="2" rx="0.5" fill="#A0714F" />
+                      </svg>
+                    )}
                     {dmg > 0 && block !== B.LADDER && (
                       <div style={{ position: "absolute", inset: 0, background: `rgba(0,0,0,${dmg * 0.4})`, pointerEvents: "none" }} />
                     )}
@@ -960,6 +979,41 @@ export default function CaveMiner() {
               padding: "7px 20px", borderRadius: 8, fontSize: "clamp(11px,1.8vw,15px)", fontWeight: 700,
               border: "1px solid #886600", zIndex: 20, whiteSpace: "nowrap",
             }}>{msg}</div>
+          )}
+
+          {/* 金塊フラッシュ */}
+          {goldFlash && (
+            <div style={{
+              position: "absolute", inset: 0, zIndex: 50, pointerEvents: "none",
+              background: "radial-gradient(ellipse at 50% 50%, rgba(255,215,0,0.45) 0%, rgba(255,170,0,0.15) 50%, transparent 80%)",
+              animation: "goldPulse 0.6s ease-out forwards",
+            }} />
+          )}
+
+          {/* キラキラ */}
+          {sparkles.length > 0 && (
+            <div style={{ position: "absolute", inset: 0, zIndex: 51, pointerEvents: "none", overflow: "hidden" }}>
+              {sparkles.map(s => (
+                <div key={s.id} style={{
+                  position: "absolute", left: `${s.x}%`, top: -20,
+                  fontSize: s.size, color: "#FFD700",
+                  textShadow: "0 0 6px #FFD700, 0 0 12px #aa8800",
+                  animation: `sparkleFall ${s.dur}s ${s.delay}s ease-in forwards`,
+                  opacity: 0,
+                }}>{s.char}</div>
+              ))}
+              <style>{`
+                @keyframes goldPulse {
+                  0% { opacity: 1; }
+                  100% { opacity: 0; }
+                }
+                @keyframes sparkleFall {
+                  0% { opacity: 1; transform: translateY(0) rotate(0deg); }
+                  80% { opacity: 0.8; }
+                  100% { opacity: 0; transform: translateY(${gameH + 40}px) rotate(${180 + Math.random() * 180}deg); }
+                }
+              `}</style>
+            </div>
           )}
 
           {atEntrance && !shopOpen && (
@@ -1153,6 +1207,7 @@ export default function CaveMiner() {
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <span style={{ fontSize: 18, fontWeight: 700, color: "#FFD700" }}>🏪 入口ショップ</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: "#FFD700" }}>💰 ¥{money.toLocaleString()}</span>
               <button onClick={() => setShopOpen(false)} style={{
                 background: "none", border: "none", color: "#555", fontSize: 26, cursor: "pointer",
                 padding: "4px 8px", touchAction: "manipulation", lineHeight: 1,
@@ -1204,27 +1259,27 @@ export default function CaveMiner() {
             </div>
 
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <button onClick={() => { if (atEntrance) buyLadder(); }} disabled={!atEntrance || money < 50} style={{
+              <button onClick={() => { if (atEntrance) buyLadder(); }} disabled={!atEntrance || money < 500000} style={{
                 flex: 1, padding: "10px 0", fontSize: 13,
                 background: (atEntrance && money >= 50) ? "#1a1200" : "#111",
                 color: (atEntrance && money >= 50) ? "#bb8844" : "#333",
                 border: "1px solid #1a1a1a", borderRadius: 6, fontFamily: "inherit",
                 cursor: (atEntrance && money >= 50) ? "pointer" : "default", touchAction: "manipulation",
-              }}>🪜 ハシゴ x3<br /><span style={{ fontSize: 11 }}>¥50</span></button>
-              <button onClick={() => { if (atEntrance) buyPlank(); }} disabled={!atEntrance || money < 50} style={{
+              }}>🪜 ハシゴ x3<br /><span style={{ fontSize: 11 }}>¥500,000</span></button>
+              <button onClick={() => { if (atEntrance) buyPlank(); }} disabled={!atEntrance || money < 500000} style={{
                 flex: 1, padding: "10px 0", fontSize: 13,
                 background: (atEntrance && money >= 50) ? "#1a1000" : "#111",
                 color: (atEntrance && money >= 50) ? "#b89860" : "#333",
                 border: "1px solid #1a1a1a", borderRadius: 6, fontFamily: "inherit",
                 cursor: (atEntrance && money >= 50) ? "pointer" : "default", touchAction: "manipulation",
-              }}>🪵 足場 x3<br /><span style={{ fontSize: 11 }}>¥50</span></button>
-              <button onClick={() => { if (atEntrance) newMapBtn(); }} disabled={!atEntrance || money < 300} style={{
+              }}>🪵 足場 x3<br /><span style={{ fontSize: 11 }}>¥500,000</span></button>
+              <button onClick={() => { if (atEntrance) newMapBtn(); }} disabled={!atEntrance || money < 3000000} style={{
                 flex: 1, padding: "10px 0", fontSize: 13,
-                background: (atEntrance && money >= 300) ? "#0e0e20" : "#111",
-                color: (atEntrance && money >= 300) ? "#7777bb" : "#333",
+                background: (atEntrance && money >= 3000000) ? "#0e0e20" : "#111",
+                color: (atEntrance && money >= 3000000) ? "#7777bb" : "#333",
                 border: "1px solid #1a1a1a", borderRadius: 6, fontFamily: "inherit",
-                cursor: (atEntrance && money >= 300) ? "pointer" : "default", touchAction: "manipulation",
-              }}>🗺️ 新しい洞窟<br /><span style={{ fontSize: 11 }}>¥300</span></button>
+                cursor: (atEntrance && money >= 3000000) ? "pointer" : "default", touchAction: "manipulation",
+              }}>🗺️ 新しい洞窟<br /><span style={{ fontSize: 11 }}>¥3,000,000</span></button>
             </div>
 
             <div style={{ color: "#333", fontSize: 11, textAlign: "center" }}>
