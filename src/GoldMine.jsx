@@ -19,6 +19,8 @@ const SHOW_CHAR_PANEL = false;
 const charPanelWidth = (w) => (SHOW_CHAR_PANEL ? Math.round(Math.min(130, Math.max(70, w * 0.12))) : 0);
 // 上のバーの高さ（px）。狭い画面では2段に折り返すので高くする
 const hudHeight = (w) => (w < 600 ? 64 : 52);
+// 縦長の画面で横に何マス見せるか。小さくするほどマスが大きくなる
+const PHONE_VIEW_COLS = 13;
 
 const GOLD_IMG = goldImg;
 
@@ -120,8 +122,10 @@ export default function CaveMiner() {
   const layout = useMemo(() => {
     const w = vp.w, h = vp.h, hudH = hudHeight(w);
     const availH = h - hudH, availW = w - charPanelWidth(w);
-    const tH = Math.floor(availH / 18);
-    const tW = Math.floor(availW / 22);
+    // 縦長の画面（スマホ）は横13マス分の大きさにして、縦は画面に入るだけ見せる
+    const portrait = h > w;
+    const tH = Math.floor(availH / (portrait ? 14 : 18));
+    const tW = Math.floor(availW / (portrait ? PHONE_VIEW_COLS : 22));
     const tile = Math.max(12, Math.min(40, Math.min(tH, tW)));
     const vc = Math.min(COLS, Math.floor(availW / tile));
     const vr = Math.min(ROWS, Math.floor(availH / tile));
