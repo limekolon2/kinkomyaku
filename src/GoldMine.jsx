@@ -267,26 +267,12 @@ export default function CaveMiner() {
         }
 
         if (!eventHandled && roll >= 0.10 && roll < 0.18) {
-          // 🌊 地下水脈: ノックバック ＋ 岩盤化
+          // 🌊 地下水脈: 掘った所が水になり、押し戻される
+          // （以前は周囲8マスを掘れない岩盤に変えていたが、テンポが悪いので廃止）
           newMap[ny][nx] = B.WATER;
-          flash("🌊 猛烈な水圧！周囲の地盤が硬化した！");
+          flash("🌊 地下水が噴き出した！");
           soundEffects.water();
-          
-          for (let ddy = -1; ddy <= 1; ddy++) {
-            for (let ddx = -1; ddx <= 1; ddx++) {
-              const bx = nx + ddx, by = ny + ddy;
-              if (bx > 0 && bx < COLS - 1 && by > 0 && by < ROWS - 1) {
-                if (bx === cpx && by === cpy) continue; 
-                if (bx === nx && by === ny) continue;
-                const cb = newMap[by][bx];
-                if (cb === B.DIRT || cb === B.STONE || cb === B.LIMESTONE || cb === B.GOLD || cb === B.DIAMOND) {
-                  newMap[by][bx] = B.BEDROCK;
-                  newHp[by][bx] = BHP[B.BEDROCK];
-                }
-              }
-            }
-          }
-          
+
           const pushX = cpx - dx, pushY = cpy - dy;
           if (pushX > 0 && pushX < COLS - 1 && pushY > 0 && pushY < ROWS - 1) {
             const pb = newMap[pushY][pushX];
