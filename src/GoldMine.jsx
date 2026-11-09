@@ -13,6 +13,13 @@ const CHAR_IMG = {
   hit:  charHitImg,
 };
 
+// 左のキャラパネルを出すかどうか。戻すときは true にする
+const SHOW_CHAR_PANEL = false;
+// キャラパネルの幅（px）。画面幅の12%を 70〜130px に収める
+const charPanelWidth = (w) => (SHOW_CHAR_PANEL ? Math.round(Math.min(130, Math.max(70, w * 0.12))) : 0);
+// 上のバーの高さ（px）。狭い画面では2段に折り返すので高くする
+const hudHeight = (w) => (w < 600 ? 64 : 52);
+
 const GOLD_IMG = goldImg;
 
 function useContainerSize(ref) {
@@ -111,8 +118,8 @@ export default function CaveMiner() {
   const toolRef = useRef(0);
 
   const layout = useMemo(() => {
-    const w = vp.w, h = vp.h, hudH = 42;
-    const availH = h - hudH, availW = w;
+    const w = vp.w, h = vp.h, hudH = hudHeight(w);
+    const availH = h - hudH, availW = w - charPanelWidth(w);
     const tH = Math.floor(availH / 18);
     const tW = Math.floor(availW / 22);
     const tile = Math.max(12, Math.min(40, Math.min(tH, tW)));
@@ -734,9 +741,9 @@ export default function CaveMiner() {
     }}>
       {/* HUD */}
       <div style={{
-        width: "100%", height: "clamp(48px,7vh,64px)", flexShrink: 0, display: "flex", alignItems: "center",
-        justifyContent: "center", gap: "clamp(8px,2vw,20px)", flexWrap: "nowrap",
-        fontSize: "clamp(13px,1.8vw,18px)", padding: "0 12px",
+        width: "100%", height: hudHeight(vp.w), boxSizing: "border-box", flexShrink: 0, display: "flex", alignItems: "center",
+        alignContent: "center", justifyContent: "center", columnGap: "clamp(8px,2vw,20px)", rowGap: 4, flexWrap: "wrap",
+        fontSize: "clamp(13px,1.8vw,18px)", padding: "0 8px", whiteSpace: "nowrap",
         background: "rgba(0,0,0,0.85)", borderBottom: "1px solid #1a1a1a", overflow: "hidden",
       }}>
         <span style={{ color: "#FFD700", fontWeight: 700 }}>💰¥{money}</span>
@@ -765,8 +772,9 @@ export default function CaveMiner() {
       {/* Game */}
       <div style={{ flex: 1, width: "100%", display: "flex", alignItems: "stretch", justifyContent: "center", position: "relative", overflow: "hidden" }}>
         {/* Character Panel */}
+        {SHOW_CHAR_PANEL && (
         <div style={{
-          width: "clamp(70px, 12vw, 130px)", flexShrink: 0,
+          width: charPanelWidth(vp.w), flexShrink: 0,
           background: "linear-gradient(180deg, #12121e 0%, #1a1028 100%)",
           borderRight: "1px solid #2a1a3a",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end",
@@ -790,6 +798,7 @@ export default function CaveMiner() {
             {charFace === "dig" ? "⛏ 掘削中" : charFace === "hit" ? "✨ 発見！" : "待機中"}
           </div>
         </div>
+        )}
         <div style={{ width: gameW, height: gameH, position: "relative", overflow: "hidden", background: "#1a1c24" }}>
           <div style={{
             position: "absolute", width: COLS * T, height: ROWS * T,
@@ -1103,7 +1112,7 @@ export default function CaveMiner() {
         </div>
 
         {/* D-Pad */}
-        <div style={{ position: "absolute", bottom: 12, left: "calc(clamp(70px, 12vw, 130px) + 12px)", zIndex: 30 }}>
+        <div style={{ position: "absolute", bottom: 12, left: charPanelWidth(vp.w) + 12, zIndex: 30 }}>
           <DPad onMove={tryMove} />
         </div>
 
