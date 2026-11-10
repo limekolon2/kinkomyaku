@@ -13,7 +13,7 @@
 - 最新のコードは GitHub の `limekolon2/kinkomyaku` の `main` ブランチ。
   過去のチャットに残っているコードは古いので使わない。
 - `main` に push すると、Vercel が自動で kinkomyaku.vercel.app にデプロイする。
-  push した時点で公開版が変わるので、push の前には必ずオーナーに確認する。
+  push した時点で公開版が変わる。2026-11-11 にオーナーから「今後も push していい」と許可をもらったので、確認なしで push してよい（push したことと内容は報告する）。
 - デプロイの成否は GitHub のコミットのステータス（context: `Vercel`）で確認できる。
 
 ## デプロイが動かないとき
