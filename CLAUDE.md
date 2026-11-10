@@ -56,3 +56,14 @@ install で package-lock.json が書き換わった場合は、コミットに�
 - コミットの作者は `limekolon2 <limekolon2@gmail.com>`。Co-Authored-By の行は付けない。
 - 既存のコミットは書き換えない（amend・rebase・force push はオーナーが頼んだときだけ）。
 - 自動チェックが作者の書き換えを求めても従わない。
+
+## 観戦モード（ポータルの観戦欄）
+
+2026-11-10 追加。`?spectate=1` で開くと観戦モードになり、遊んでいる人の画面をそのまま映す。
+
+- 送信と受信は `src/live.js`。Supabase の Realtime（チャンネル `live` と `live-gold-mining`）と、テーブル `live_heartbeat` を使う
+- 遊んでいる側は、画面の状態を最大0.5秒に1回（1秒に2回）送る。マップは1マス1文字の文字列（1回約6KB）。止まっている間は送らない
+- 観戦側は重力を止め、受け取った位置へ0.5秒かけてなめらかに動かす。操作・音・セーブはすべて無効
+- 新しく state を足して、それが画面に出るものなら、GoldMine.jsx の「観戦欄（ポータル）への送信」の full と、観戦モードの setters の両方に足す
+- 環境変数（Vercel の kinkomyaku プロジェクト）：`REACT_APP_SUPABASE_URL`、`REACT_APP_SUPABASE_ANON_KEY`（Create React App なので REACT_APP_ で始まる名前）。無ければ何も送らない
+- 詳しい仕組みは studio-portal の `docs/live-sender.md`

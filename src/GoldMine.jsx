@@ -6,6 +6,7 @@ import goldImg from "./assets/gold.png";
 import { COLS, ROWS, B, BHP, TOOLS, GP, DP } from "./constants";
 import { generateMap } from "./mapGenerator";
 import { soundEffects } from "./audio";
+import { liveStart, liveUpdate, liveSpectate, SPECTATE } from "./live";
 
 const CHAR_IMG = {
   idle: charIdleImg,
@@ -68,6 +69,32 @@ function DPad({ onMove }) {
   );
 }
 
+// ───────── 観戦欄（ポータル）用：状態を短い文字列にする ─────────
+// マップ：1マス1文字（ブロックの番号を36進数で）。硬さ：35以上は「満タン」として "z"
+const encodeGrid = (grid, cap = false) =>
+  grid.map(row => row.map(v => (cap && v >= 35 ? "z" : Math.max(0, v).toString(36))).join(""));
+const decodeMap = (rows, hpRows) => {
+  const map = rows.map(r => Array.from(r, ch => parseInt(ch, 36)));
+  const hp = hpRows.map((r, y) => Array.from(r, (ch, x) => (ch === "z" ? (BHP[map[y][x]] ?? 999) : parseInt(ch, 36))));
+  return { map, hp };
+};
+// 探索済みマス（Set）を 16進の文字列に
+const encodeRevealed = (set) => {
+  const bits = new Uint8Array(Math.ceil((COLS * ROWS) / 4));
+  set.forEach(i => { bits[i >> 2] |= 1 << (i & 3); });
+  return Array.from(bits, b => b.toString(16)).join("");
+};
+const decodeRevealed = (hex) => {
+  const set = new Set();
+  for (let k = 0; k < hex.length; k++) {
+    const b = parseInt(hex[k], 16);
+    for (let j = 0; j < 4; j++) if (b & (1 << j)) set.add(k * 4 + j);
+  }
+  return set;
+};
+// 観戦側は1秒2回の更新の間を、この長さでなめらかにつなぐ
+const MOVE_TRANSITION = SPECTATE ? "0.5s" : "0.12s";
+
 export default function CaveMiner() {
   const rootRef = useRef(null);
   const vp = useContainerSize(rootRef);
@@ -106,6 +133,7 @@ export default function CaveMiner() {
   const msgT = useRef(null);
 
   useEffect(() => {
+    if (SPECTATE) return; // 観戦モードでは、見ている人のセーブを上書きしない
     localStorage.setItem("cm_save", JSON.stringify({
       inv, money, tool, totalSold, ladders, planks, dynamites
     }));
@@ -355,9 +383,89 @@ export default function CaveMiner() {
     }
   }, [planks, flash]);
 
-  // Gravity
+  // ───────── 観戦欄（ポータル）への送信。読み取って送るだけで、ゲームの進行・セーブには関与しない ─────────
+  const liveActiveRef = useRef(false);
+  const liveMapEnc = useMemo(() => (mapData ? { m: encodeGrid(mapData.map), h: encodeGrid(mapData.hp, true) } : null), [mapData]);
+  const liveRevealedEnc = useMemo(() => encodeRevealed(revealed), [revealed]);
   useEffect(() => {
-    if (screen !== "game") return;
+    if (SPECTATE) return;
+    if (screen !== "game") { liveActiveRef.current = false; return; }
+    if (!liveActiveRef.current) { liveStart(); liveActiveRef.current = true; }
+  }, [screen]);
+  useEffect(() => {
+    if (SPECTATE || screen !== "game" || !liveMapEnc) return;
+    try {
+      liveUpdate(
+        {
+          stats: {
+            深さ: `${py}段目`,
+            所持金: `¥${money.toLocaleString()}`,
+            金: inv.gold,
+            ダイヤ: inv.diamond,
+          },
+          board: `⛏ ${TOOLS[tool].name}　ハシゴ ${ladders}・足場 ${planks}・ダイナマイト ${dynamites}`,
+        },
+        {
+          full: {
+            screen, map: liveMapEnc.m, hp: liveMapEnc.h, revealed: liveRevealedEnc,
+            px, py, facing: facingDir.current, inv, money, tool, totalSold, ladders, planks, dynamites,
+            activeDynamites, msg, shopOpen, mapView, charFace, goldFlash,
+          },
+        }
+      );
+    } catch { /* 送信用の要約に失敗してもゲームは続ける */ }
+  }, [screen, liveMapEnc, liveRevealedEnc, px, py, inv, money, tool, totalSold, ladders, planks, dynamites,
+      activeDynamites, msg, shopOpen, mapView, charFace, goldFlash]);
+
+  // 観戦モード（?spectate=1）：受け取った状態でこの画面を描き直す。操作・音・セーブはすべて無効
+  useEffect(() => {
+    if (!SPECTATE) return;
+    const badge = document.createElement("div");
+    badge.textContent = "観戦中 — 操作はできません";
+    Object.assign(badge.style, {
+      position: "fixed", bottom: "10px", right: "10px", zIndex: 99999, pointerEvents: "none",
+      background: "rgba(0,0,0,0.7)", color: "#ddd", font: "12px sans-serif", padding: "4px 10px",
+      borderRadius: "999px", letterSpacing: "1px",
+    });
+    const cover = document.createElement("div");
+    cover.textContent = "プレイが始まるのを待っています";
+    Object.assign(cover.style, {
+      position: "fixed", inset: "0", zIndex: 99998, display: "flex", alignItems: "center",
+      justifyContent: "center", background: "#0a0a0a", color: "#888", font: "14px sans-serif", letterSpacing: "2px",
+    });
+    document.body.append(cover, badge);
+
+    // キー・クリック・タッチをすべて止める（ゲームの操作ボタンもカメラのドラッグも効かない）
+    const block = (e) => { e.stopPropagation(); if (e.cancelable && e.type !== "touchstart") e.preventDefault(); };
+    const events = ["keydown", "keyup", "click", "dblclick", "contextmenu", "pointerdown", "pointerup",
+      "mousedown", "mouseup", "touchstart", "touchend", "wheel"];
+    events.forEach(ev => window.addEventListener(ev, block, { capture: true, passive: false }));
+
+    const stop = liveSpectate(({ state: s, ended }) => {
+      cover.remove();
+      if (s.map && s.hp) setMapData(decodeMap(s.map, s.hp));
+      if (typeof s.revealed === "string") setRevealed(decodeRevealed(s.revealed));
+      if (typeof s.facing === "number") facingDir.current = s.facing;
+      const setters = {
+        screen: setScreen, px: setPx, py: setPy, inv: setInv, money: setMoney, tool: setTool, totalSold: setTotalSold,
+        ladders: setLadders, planks: setPlanks, dynamites: setDynamites, activeDynamites: setActiveDynamites,
+        msg: setMsg, shopOpen: setShopOpen, mapView: setMapView, charFace: setCharFace, goldFlash: setGoldFlash,
+      };
+      Object.entries(setters).forEach(([key, set]) => { if (key in s) set(s[key]); });
+      badge.textContent = ended ? "観戦中 — このプレイは終了しました" : "観戦中 — 操作はできません";
+    });
+
+    return () => {
+      stop();
+      events.forEach(ev => window.removeEventListener(ev, block, { capture: true }));
+      badge.remove();
+      cover.remove();
+    };
+  }, []);
+
+  // Gravity（観戦モードでは、遊んでいる側の位置をそのまま映すので動かさない）
+  useEffect(() => {
+    if (screen !== "game" || SPECTATE) return;
     const g = setInterval(() => {
       const md = mapDataRef.current;
       if (!md) return;
@@ -793,7 +901,7 @@ export default function CaveMiner() {
           <div style={{
             position: "absolute", width: COLS * T, height: ROWS * T,
             transform: `translate(${-camX * T}px, ${-camY * T}px)`,
-            transition: "transform 0.12s linear",
+            transition: `transform ${MOVE_TRANSITION} linear`,
           }}>
             {/* Render blocks */}
             {mapData && mapData.map.map((row, y) => {
@@ -949,7 +1057,7 @@ export default function CaveMiner() {
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: T * 0.7, zIndex: 10,
               filter: "drop-shadow(0 0 6px rgba(255,200,50,0.6))",
-              transition: "left 0.12s linear, top 0.12s linear",
+              transition: `left ${MOVE_TRANSITION} linear, top ${MOVE_TRANSITION} linear`,
             }}>⛏️</div>
 
             {/* Particles */}
