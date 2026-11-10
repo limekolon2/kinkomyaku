@@ -117,6 +117,8 @@ async function flushUsage() {
 let sessionId = null;
 let startedAt = null;
 let log = [];
+let lastScreen = null; // 「やめる」で終了を送るときに使う、最後の画面
+let lastFull = null;
 
 function makeThrottle(interval, send) {
   let pending = null;
@@ -145,6 +147,11 @@ function makeThrottle(interval, send) {
       if (!pending) return;
       if (timer) clearTimeout(timer);
       run();
+    },
+    cancel() {
+      pending = null;
+      if (timer) clearTimeout(timer);
+      timer = null;
     },
   };
 }
@@ -202,6 +209,8 @@ export function liveLog(text) {
  */
 export function liveUpdate(screen, { ended = false, full = null } = {}) {
   if (SPECTATE || !sessionId) return;
+  lastScreen = screen;
+  if (full) lastFull = full;
   const state = {
     game_id: GAME_ID,
     game_title: GAME_TITLE,
@@ -230,6 +239,48 @@ if (typeof document !== "undefined") {
     if (document.visibilityState === "hidden") flushAll();
   });
   window.addEventListener("pagehide", flushAll);
+}
+
+/**
+ * 「やめる」ボタンでゲームを終えるときに呼ぶ。観戦欄にすぐ「終了」を届ける。
+ * 送り終わるまで待つ Promise を返す（ページを離れる前に await する）
+ */
+export async function liveEnd() {
+  if (SPECTATE || !sessionId) return;
+  const id = sessionId;
+  sessionId = null;
+  fullOut.cancel();
+  summaryOut.cancel();
+  const now = new Date().toISOString();
+  const state = {
+    game_id: GAME_ID,
+    game_title: GAME_TITLE,
+    session_id: id,
+    started_at: startedAt,
+    updated_at: now,
+    screen: lastScreen || {},
+    log: [...log],
+    spectate: true,
+    ended: true,
+  };
+  const full = lastFull ? { session_id: id, sent_at: now, ended: true, state: lastFull } : null;
+  try {
+    if (local && full) local.postMessage(full);
+    if (await connect()) {
+      const row = { game_id: GAME_ID, session_id: id, updated_at: now, state };
+      await Promise.all([
+        full ? sendBroadcast(FULL_CHANNEL, FULL_EVENT, full) : null,
+        sendBroadcast(SUMMARY_CHANNEL, SUMMARY_EVENT, state),
+        client
+          .from(TABLE)
+          .upsert({ ...row, full_state: full })
+          .then(({ error }) => (error ? client.from(TABLE).upsert(row) : null)),
+      ]);
+    }
+  } catch {
+    // 届かなくても、観戦欄は60秒で待機表示に戻る
+  }
+  await flushUsage();
 }
 
 // ───────── 観戦する側：受信 ─────────

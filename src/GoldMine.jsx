@@ -6,7 +6,8 @@ import goldImg from "./assets/gold.png";
 import { COLS, ROWS, B, BHP, TOOLS, GP, DP } from "./constants";
 import { generateMap } from "./mapGenerator";
 import { soundEffects } from "./audio";
-import { liveStart, liveUpdate, liveSpectate, SPECTATE } from "./live";
+import { liveStart, liveUpdate, liveSpectate, liveEnd, SPECTATE } from "./live";
+import QuitButton from "./QuitButton";
 
 const CHAR_IMG = {
   idle: charIdleImg,
@@ -865,6 +866,17 @@ export default function CaveMiner() {
           border: mapView ? "1px solid #448844" : "1px solid #222",
           borderRadius: 5, fontFamily: "inherit", cursor: "pointer", touchAction: "manipulation", whiteSpace: "nowrap",
         }}>🗺️マップ</button>
+        {/* やめてポータルに戻る（観戦モードでは出さない）。所持品は変わるたびに自動で保存済み */}
+        <QuitButton
+          hidden={SPECTATE}
+          note="所持金・金・ダイヤ・道具は保存されます。掘ったマップは保存されません。"
+          onQuit={liveEnd}
+          theme={{ panel: "#15151c", text: "#e8e0c8", sub: "#9a9080", border: "#3a3420", accent: "#FFD700", accentText: "#1a1400", font: "'Noto Sans JP', sans-serif", radius: 8 }}
+          style={{
+            padding: "4px 12px", fontSize: "clamp(12px,1.6vw,17px)", background: "#111", color: "#777",
+            border: "1px solid #222", borderRadius: 5, fontFamily: "inherit", cursor: "pointer", touchAction: "manipulation", whiteSpace: "nowrap",
+          }}
+        />
       </div>
 
       {/* Game */}
